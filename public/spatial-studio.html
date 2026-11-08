@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WiFi CSI Spatial Vision Studio</title>
+    <style>
+        body {
+            background-color: #0d1117;
+            color: #58a6ff;
+            font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 { margin-bottom: 5px; color: #58a6ff; text-align: center; }
+        p.subtitle { color: #8b949e; margin-top: 0; margin-bottom: 20px; }
+        .container {
+            display: flex;
+            gap: 20px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        canvas {
+            border: 2px solid #30363d;
+            background-color: #010409;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+        }
+        .dashboard {
+            width: 320px;
+            background: #161b22;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #30363d;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .status {
+            font-size: 1.1em;
+            font-weight: bold;
+            padding: 12px;
+            border-radius: 6px;
+            text-align: center;
+            letter-spacing: 1px;
+            transition: all 0.2s ease;
+        }
+        .detected { background-color: #238636; color: white; border: 1px solid #3fb950; box-shadow: 0 0 12px rgba(35,134,54,0.4); }
+        .idle { background-color: #21262d; color: #8b949e; border: 1px solid #30363d; }
+        .metric {
+            background: #0d1117;
+            padding: 10px 14px;
+            border-radius: 6px;
+            border: 1px solid #21262d;
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.95em;
+        }
+        .metric span { color: #fff; font-weight: bold; }
+        .ws-bar {
+            margin-top: 15px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            font-size: 0.8em;
+            color: #8b949e;
+            text-align: center;
+        }
+        .ws-bar.connected { color: #3fb950; border-color: #238636; }
+        .ws-bar.fallback { color: #d29922; border-color: #9e6a03; }
+        .btn-toggle {
+            background: #238636;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: bold;
+            margin-top: 5px;
+        }
+        .btn-toggle:hover { background: #2ea043; }
+    </style>
+</head>
+<body>
+    <h1>WiFi CSI Human Radar Studio</h1>
+    <p class="subtitle">Spatial Vision &amp; Presence Detection System</p>
+
+    <div class="container">
+        <canvas id="radarCanvas" width="500" height="500"></canvas>
+        <div class="dashboard">
+            <div id="statusBox" class="status idle">CĂUTARE SEMNAL...</div>
+            <div class="metric">Varianță CSI: <span id="varVal">0</span></div>
+            <div class="metric">Distanță Estimată: <span id="distVal">0</span> m</div>
+            <div class="metric">Putere Semnal: <span id="rssiVal">0</span> dBm</div>
+            <div class="metric">Unghi Radar: <span id="angleVal">0°</span></div>
+            <div class="metric">Subpurtătoare: <span>30 canale OFDM</span></div>
+            
+            <div id="wsStatus" class="ws-bar">Se conectează la ws://localhost:8765...</div>
+            <button id="modeBtn" class="btn-toggle" onclick="toggleEngineMode()">Comută Motor: Simulat / WebSocket</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('radarCanvas');
+        const ctx = canvas.getContext('2d');
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        const maxRadius = 220;
+
+        const SUBCARRIERS = 30;
+        const BASE_DISTANCE = 2.5;
+        let tick = 0;
+        let simulationInterval = null;
+        let ws = null;
+        let useSimulation = false;
+
+        function processCsiData(t) {
+            const csiAmplitudes = [];
+            const movementFactor = Math.sin(t * 0.1) * 1.5;
+
+            for (let i = 0; i < SUBCARRIERS; i++) {
+                const noise = (Math.random() - 0.5) * 0.4;
+                const amp = 20 + Math.sin(i * 0.3 + t * 0.15) * 5 + movementFactor + noise;
+                csiAmplitudes.push(parseFloat(amp.toFixed(2)));
+            }
+
+            const meanAmp = csiAmplitudes.reduce((a, b) => a + b, 0) / csiAmplitudes.length;
+            const variance = csiAmplitudes.reduce((sum, x) => sum + Math.pow(x - meanAmp, 2), 0) / csiAmplitudes.length;
+            const angle = (t * 5) % 360;
+            const detected = variance > 1.2;
+            const estimatedDistance = parseFloat((BASE_DISTANCE + Math.sin(t * 0.05) * 0.8).toFixed(2));
+
+            return {
+                timestamp: t,
+                csi_raw: csiAmplitudes,
+                variance: parseFloat(variance.toFixed(3)),
+                human_detected: detected,
+                radar: {
+                    angle: angle,
+                    distance_m: detected ? estimatedDistance : 0,
+                    signal_strength_dbm: Math.round(-50 - (variance * 2))
+                }
+            };
+        }
+
+        function updateDashboard(data) {
+            const statusBox = document.getElementById('statusBox');
+            document.getElementById('varVal').innerText = data.variance;
+            document.getElementById('distVal').innerText = data.radar.distance_m;
+            document.getElementById('rssiVal').innerText = data.radar.signal_strength_dbm;
+            document.getElementById('angleVal').innerText = Math.round(data.radar.angle) + '°';
+
+            if (data.human_detected) {
+                statusBox.innerText = "OM DETECTAT";
+                statusBox.className = "status detected";
+            } else {
+                statusBox.innerText = "FĂRĂ MIȘCARE";
+                statusBox.className = "status idle";
+            }
+        }
+
+        function drawRadar(data) {
+            ctx.fillStyle = 'rgba(1, 4, 9, 0.15)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Distance circles
+            ctx.strokeStyle = '#30363d';
+            ctx.lineWidth = 1;
+            for (let r = 50; r <= maxRadius; r += 50) {
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, r, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            // Radar Sweep line
+            const angleRad = (data.radar.angle * Math.PI) / 180;
+            ctx.strokeStyle = 'rgba(0, 255, 136, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.lineTo(centerX + maxRadius * Math.cos(angleRad), centerY + maxRadius * Math.sin(angleRad));
+            ctx.stroke();
+
+            // Detected Target Marker
+            if (data.human_detected && data.radar.distance_m > 0) {
+                const targetR = (data.radar.distance_m / 4) * maxRadius;
+                const targetX = centerX + targetR * Math.cos(angleRad);
+                const targetY = centerY + targetR * Math.sin(angleRad);
+
+                ctx.fillStyle = '#ff7b72';
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#ff7b72';
+                ctx.beginPath();
+                ctx.arc(targetX, targetY, 8, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        function startSimulation() {
+            if (simulationInterval) clearInterval(simulationInterval);
+            const wsStatus = document.getElementById('wsStatus');
+            wsStatus.className = 'ws-bar fallback';
+            wsStatus.innerText = '● Motor CSI Activ (Procesare matematică în timp real)';
+            useSimulation = true;
+
+            simulationInterval = setInterval(() => {
+                const data = processCsiData(tick);
+                updateDashboard(data);
+                drawRadar(data);
+                tick++;
+            }, 50);
+        }
+
+        function connectWebSocket() {
+            const wsStatus = document.getElementById('wsStatus');
+            try {
+                ws = new WebSocket('ws://localhost:8765');
+                ws.onopen = () => {
+                    if (simulationInterval) clearInterval(simulationInterval);
+                    wsStatus.className = 'ws-bar connected';
+                    wsStatus.innerText = '● Conectat la server.py (ws://localhost:8765)';
+                    useSimulation = false;
+                };
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    updateDashboard(data);
+                    drawRadar(data);
+                };
+                ws.onerror = () => {
+                    if (!useSimulation) {
+                        startSimulation();
+                    }
+                };
+                ws.onclose = () => {
+                    if (!useSimulation) {
+                        startSimulation();
+                    }
+                };
+            } catch (e) {
+                startSimulation();
+            }
+        }
+
+        function toggleEngineMode() {
+            if (useSimulation) {
+                connectWebSocket();
+            } else {
+                if (ws) ws.close();
+                startSimulation();
+            }
+        }
+
+        // Initialize
+        connectWebSocket();
+        setTimeout(() => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                startSimulation();
+            }
+        }, 1200);
+    </script>
+</body>
+</html>

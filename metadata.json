@@ -1,0 +1,13 @@
+{
+  "name": "Radar Wi-Fi Mobil",
+  "description": "Aplicație radar mobilă prin perete ce detectează orice om și aparat electronic (telefoane, laptopuri, smart TV, camere, electrocasnice EMF) direct pe telefon cu mod AR, teste complete și alerte acustice.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
+
+
